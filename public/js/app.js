@@ -79,7 +79,13 @@
     sheetArea: document.getElementById('sheetArea'),
     sheetAreaSub: document.getElementById('sheetAreaSub'),
     sheets: document.getElementById('sheets'),
-    sheetEmpty: document.getElementById('sheetEmpty')
+    sheetEmpty: document.getElementById('sheetEmpty'),
+    batchSheetPrintBtn: document.getElementById('batchSheetPrintBtn'),
+    batchSheetHint: document.getElementById('batchSheetHint'),
+    batchSheetArea: document.getElementById('batchSheetArea'),
+    batchSheetAreaSub: document.getElementById('batchSheetAreaSub'),
+    batchSheets: document.getElementById('batchSheets'),
+    batchSheetEmpty: document.getElementById('batchSheetEmpty')
   };
 
   // ---------- Canvas 实际字宽测量（按 font 分别缓存） ----------
@@ -534,8 +540,10 @@
 
   var lastGood = null;
   var currentQr = null; // 当前生效的二维码（LabelQR.encode 结果）；null 表示不生成
-  var lastSheets = null; // 当前可用的拼版方案；null 表示拼版不可用
-  var printMode = 'single'; // 本次打印输出：'single' 单张 / 'sheet' 拼版
+  var lastSheets = null; // 当前可用的同款拼版方案；null 表示拼版不可用
+  var batchImpose = null; // 校样生成的异款拼版素材（各记录自己的展签 DOM）；null 表示未生成/已失效
+  var lastBatchSheets = null; // 当前可用的异款拼版分页；null 表示异款拼版不可打印
+  var printMode = 'single'; // 本次打印输出：'single' 单张 / 'sheet' 同款拼版 / 'batch' 异款批量拼版
 
   // 把 QR 模块矩阵画到 canvas 上（白底黑块；显示尺寸由 CSS 固定为 18mm，
   // 码图之外的空白由底部 22mm 预留区与内边距保证，预览与打印共用同一 canvas）
@@ -1260,6 +1268,7 @@
   function adoptStockSize(w, h) {
     el.widthMm.value = w;
     el.heightMm.value = h;
+    invalidateBatchSheets('展签尺寸已修改：异款拼版已失效，请重新点击「开始校样」按新尺寸生成。');
     render();
   }
 
@@ -1273,6 +1282,7 @@
   // CSV 输入提示：实时解析并汇总记录数与逐条校验错误（不排版、不改变成品）
   function updateBatchHint() {
     el.batchResult.hidden = true;
+    invalidateBatchSheets('CSV 内容已修改：异款拼版已失效，请重新点击「开始校样」生成。');
     var raw = el.batchCsv.value;
     el.batchHint.classList.remove('err');
     if (!String(raw).trim()) {
@@ -1310,6 +1320,7 @@
     var batch = window.LabelBatch.buildBatch(el.batchCsv.value);
     if (batch.errors.length) {
       showBatchError(batch.errors.join('\n'));
+      invalidateBatchSheets('校样未通过（原因见上方），异款拼版已清空；修正后请重新点击「开始校样」。');
       return;
     }
 
@@ -1317,26 +1328,30 @@
     var c = collectInputs();
     if (c.qrError) {
       showBatchError('当前展品介绍链接有误，无法校样：\n' + c.qrError);
+      invalidateBatchSheets('校样未通过（原因见上方），异款拼版已清空；修正后请重新点击「开始校样」。');
       return;
     }
     if (c.protect.error) {
       showBatchError('当前专名保护表有误，无法校样：\n' + c.protect.error);
+      invalidateBatchSheets('校样未通过（原因见上方），异款拼版已清空；修正后请重新点击「开始校样」。');
       return;
     }
     var glossary = window.LabelTerms.parseGlossary(el.glossary.value);
     if (glossary.errors.length) {
       showBatchError('当前双语术语对照表有误，无法校样：\n' + glossary.errors.join('\n'));
+      invalidateBatchSheets('校样未通过（原因见上方），异款拼版已清空；修正后请重新点击「开始校样」。');
       return;
     }
     if (!(c.input.widthMm >= 30 && c.input.widthMm <= 999 &&
           c.input.heightMm >= 20 && c.input.heightMm <= 999)) {
       showBatchError('当前标签尺寸无效（宽 30–999mm，高 20–999mm），无法校样。');
+      invalidateBatchSheets('校样未通过（原因见上方），异款拼版已清空；修正后请重新点击「开始校样」。');
       return;
     }
 
     var paraAlignOn = el.paraAlign.checked;
     var rows = batch.records.map(function (rec) {
-      if (!rec.valid) return { rec: rec, result: null, termFail: null };
+      if (!rec.valid) return { rec: rec, result: null, termFail: null, trial: null };
       var enTrim = rec.en.trim();
       // 仅替换三栏文案；尺寸、段落对齐、专名、二维码预留均沿用当前设置
       var trial = {
@@ -1364,10 +1379,12 @@
             ' 处术语次数不符（载入后可在「双语术语核对」区查看明细）';
         }
       }
-      return { rec: rec, result: result, termFail: termFail };
+      return { rec: rec, result: result, termFail: termFail, trial: trial };
     });
 
     renderBatchResult(c, glossary.entries.length, paraAlignOn, rows);
+    // 异款批量拼版：通过记录按原顺序各自生成展签并拼入 A4 页，失败记录不进入拼版
+    buildBatchImpose(c, rows);
   }
 
   // 校样结果：逐条列出可用字号或失败原因；通过记录提供「载入编辑」
@@ -1387,8 +1404,11 @@
       ' · 保护词 ' + (c.input.protectedWords ? c.input.protectedWords.length : 0) + ' 个' +
       (c.qr ? ' · 预留 ' + QR_BAND_MM + 'mm 二维码区' : ' · 无二维码') +
       (termCount ? ' · 术语 ' + termCount + ' 对' : '') +
-      '。\n共 ' + rows.length + ' 条记录，' + passCount +
-      ' 条通过校样；修改尺寸或设置后请重新点击「开始校样」。';
+      '。\n共 ' + rows.length + ' 条记录，' + passCount + ' 条通过校样' +
+      (passCount
+        ? '，已按原顺序拼入右侧「异款批量拼版预览」（失败记录不进入拼版）'
+        : '；没有记录进入异款拼版') +
+      '；修改尺寸或设置后请重新点击「开始校样」。';
     el.batchResult.appendChild(head);
 
     var table = document.createElement('table');
@@ -1670,17 +1690,235 @@
     }
   }
 
+  // ---------- 异款批量拼版：校样通过的不同记录按原顺序拼入 A4 页 ----------
+  // 每条通过记录用自己的排版结果独立生成展签 DOM（预断行、段落对齐 grid 与
+  // 二维码码图各自保留），再按当前展签毫米尺寸、纸张方向、每边 10mm 留白与
+  // 4mm 间隔逐页排入 A4；失败记录只在校样结果中列出原因，不进入拼版。
+
+  // 由一次成功的排版结果构建独立展签 DOM（不触碰右侧单张预览）；
+  // 结构与 applyResult 写入 #label 的结果一致，二者需同步维护
+  function buildLabelElement(input, result, qr) {
+    var node = document.createElement('div');
+    node.className = 'label sheet-label';
+    var s = node.style;
+    s.setProperty('--label-w', input.widthMm + 'mm');
+    s.setProperty('--label-h', input.heightMm + 'mm');
+    s.setProperty('--body-size', result.bodyPx + 'px');
+    s.setProperty('--title-size', result.titlePx + 'px');
+    s.setProperty('--title-gap',
+      result.titlePlan && (result.zhPlan || result.enPlan)
+        ? (result.bodyPx * TITLE_GAP_PX_FACTOR) + 'px'
+        : '0px');
+    s.setProperty('--para-gap', result.bodyPx * PARA_GAP_PX_FACTOR + 'px');
+
+    if (result.titlePlan) {
+      var titleEl = document.createElement('div');
+      titleEl.className = 'label-title';
+      buildLines(titleEl, result.titlePlan);
+      node.appendChild(titleEl);
+    }
+
+    if (result.paired && result.zhPlan && result.enPlan) {
+      // 段落对齐成品：与单张预览同一 grid 布局
+      var pairedEl = document.createElement('div');
+      pairedEl.className = 'label-content paired';
+      buildPairedLines(pairedEl, result.zhPlan, result.enPlan);
+      node.appendChild(pairedEl);
+    } else {
+      var content = document.createElement('div');
+      content.className = 'label-content' + (result.dual ? ' dual' : '');
+      var zhCol = document.createElement('div');
+      zhCol.className = 'label-col';
+      if (result.zhPlan) buildLines(zhCol, result.zhPlan);
+      content.appendChild(zhCol);
+      if (result.dual) {
+        var enCol = document.createElement('div');
+        enCol.className = 'label-col label-col-en';
+        if (result.enPlan) buildLines(enCol, result.enPlan);
+        content.appendChild(enCol);
+      }
+      node.appendChild(content);
+    }
+
+    // 二维码：每张展签按同一模块矩阵绘制自己的码图
+    if (qr) {
+      var qrBox = document.createElement('div');
+      qrBox.className = 'label-qr';
+      var canvas = document.createElement('canvas');
+      drawQr(canvas, qr.modules);
+      qrBox.appendChild(canvas);
+      node.appendChild(qrBox);
+    }
+    return node;
+  }
+
+  // 校样完成后生成拼版素材：通过记录按 CSV 原顺序各自生成展签，失败记录不进入拼版
+  function buildBatchImpose(c, rows) {
+    var labels = [];
+    var failed = 0;
+    rows.forEach(function (row) {
+      if (row.result && row.result.ok && !row.termFail) {
+        labels.push(buildLabelElement(row.trial, row.result, c.qr));
+      } else {
+        failed++;
+      }
+    });
+    batchImpose = {
+      labels: labels,
+      labelW: c.input.widthMm,
+      labelH: c.input.heightMm,
+      failed: failed
+    };
+    paginateBatchSheets();
+  }
+
+  function setBatchSheetHint(text, kind) {
+    el.batchSheetHint.textContent = text;
+    el.batchSheetHint.className = 'sheet-hint' + (kind ? ' ' + kind : '');
+  }
+
+  function showBatchSheetEmpty(msg, isErr) {
+    el.batchSheetEmpty.textContent = msg;
+    el.batchSheetEmpty.className = 'sheet-empty' + (isErr ? ' err' : '');
+    el.batchSheetEmpty.hidden = false;
+  }
+
+  // 按当前纸张方向把拼版素材逐页排入 A4：每页 cols×rows 张，
+  // 从左到右、从上到下，展签顺序即 CSV 原顺序；最后一页可能不满
+  function paginateBatchSheets() {
+    lastBatchSheets = null;
+    el.batchSheetPrintBtn.disabled = true;
+    el.batchSheets.innerHTML = '';
+    el.batchSheetEmpty.hidden = true;
+
+    if (!batchImpose) {
+      setBatchSheetHint('尚未生成异款拼版：在「批量校样」区粘贴 CSV 并点击「开始校样」，' +
+        '通过校验的记录将按原顺序拼入 A4 页。');
+      el.batchSheetAreaSub.textContent = '校样通过的不同记录按原顺序拼入 A4 页';
+      showBatchSheetEmpty('尚未生成异款拼版：请先在「批量校样」区粘贴 CSV 并点击「开始校样」，' +
+        '通过校验的不同记录会按原顺序排入这里的 A4 印刷页。');
+      return;
+    }
+    if (!batchImpose.labels.length) {
+      setBatchSheetHint('没有通过校样的记录，异款拼版不可用；失败原因见上方校样结果。', 'err');
+      el.batchSheetAreaSub.textContent = '异款拼版不可用：没有通过校样的记录';
+      showBatchSheetEmpty('没有通过校样的记录：各记录的失败原因见上方校样结果，' +
+        '修正 CSV 或当前设置后请重新点击「开始校样」。', true);
+      return;
+    }
+
+    var landscape = el.orientLandscape.checked;
+    var orientName = landscape ? '横向' : '纵向';
+    var labelW = batchImpose.labelW;
+    var labelH = batchImpose.labelH;
+    var plan = planSheetCapacity(labelW, labelH, landscape);
+
+    // 单页连一张都放不下：说明展签尺寸与纸内可用尺寸并禁用异款拼版打印
+    if (plan.cols < 1 || plan.rows < 1) {
+      var msg = 'A4 ' + orientName + '纸内连一张展签都放不下：展签 ' +
+        fmtMm(labelW) + ' × ' + fmtMm(labelH) +
+        '，纸内可用 ' + fmtMm(plan.usableW) + ' × ' + fmtMm(plan.usableH) +
+        '（A4 ' + orientName + ' ' + plan.pageW + '×' + plan.pageH + 'mm，' +
+        '每边留白 ' + SHEET_MARGIN_MM + 'mm）。';
+      setBatchSheetHint(msg + '\n可切换纸张方向，或缩小展签尺寸后重新校样；异款拼版打印已禁用。', 'err');
+      el.batchSheetAreaSub.textContent = '异款拼版不可用：展签超出纸内可用尺寸';
+      showBatchSheetEmpty(msg + '\n可切换纸张方向，或缩小展签尺寸后重新点击「开始校样」。', true);
+      return;
+    }
+
+    var perPage = plan.cols * plan.rows;
+    var total = batchImpose.labels.length;
+    var pages = Math.ceil(total / perPage);
+    for (var p = 0; p < pages; p++) {
+      var block = document.createElement('div');
+      block.className = 'sheet-block';
+      var wrap = document.createElement('div');
+      wrap.className = 'sheet-wrap';
+      var sheet = document.createElement('div');
+      sheet.className = 'sheet';
+      sheet.style.width = plan.pageW + 'mm';
+      sheet.style.height = plan.pageH + 'mm';
+      var count = Math.min(perPage, total - p * perPage);
+      for (var i = 0; i < count; i++) {
+        var col = i % plan.cols;
+        var row = Math.floor(i / plan.cols);
+        var cell = batchImpose.labels[p * perPage + i];
+        cell.style.left = (SHEET_MARGIN_MM + col * (labelW + SHEET_GAP_MM)) + 'mm';
+        cell.style.top = (SHEET_MARGIN_MM + row * (labelH + SHEET_GAP_MM)) + 'mm';
+        sheet.appendChild(cell);
+      }
+      wrap.appendChild(sheet);
+      block.appendChild(wrap);
+      var cap = document.createElement('div');
+      cap.className = 'sheet-caption';
+      cap.textContent = '第 ' + (p + 1) + ' / ' + pages + ' 页 · 本页 ' + count + ' 张';
+      block.appendChild(cap);
+      el.batchSheets.appendChild(block);
+    }
+
+    lastBatchSheets = {
+      pageW: plan.pageW, pageH: plan.pageH,
+      cols: plan.cols, rows: plan.rows, pages: pages
+    };
+    el.batchSheetPrintBtn.disabled = false;
+    setBatchSheetHint('A4 ' + orientName + '：每页 ' + plan.cols + ' 列 × ' + plan.rows +
+      ' 行 = ' + perPage + ' 张，' + total + ' 张不同展签共 ' + pages + ' 页；每边留白 ' +
+      SHEET_MARGIN_MM + 'mm、展签间隔 ' + SHEET_GAP_MM + 'mm，按原毫米尺寸拼版，不缩放。' +
+      (batchImpose.failed
+        ? '\n另有 ' + batchImpose.failed + ' 条记录未通过校样，未进入拼版（原因见上方校样结果）。'
+        : ''), 'ok');
+    el.batchSheetAreaSub.textContent = 'A4 ' + orientName + ' · 每页 ' + plan.cols +
+      ' × ' + plan.rows + ' = ' + perPage + ' 张 · ' + total + ' 张不同展签共 ' + pages + ' 页';
+    fitBatchSheets();
+  }
+
+  // 屏幕上的纸张整体缩放（仅显示用；打印时 transform 被打印样式清除，纸张 1:1）
+  function fitBatchSheets() {
+    if (!lastBatchSheets) return;
+    var availW = el.batchSheetArea.clientWidth - 48;
+    var wPx = lastBatchSheets.pageW * PX_PER_MM;
+    var hPx = lastBatchSheets.pageH * PX_PER_MM;
+    var scale = availW > 0 ? Math.min(1, availW / wPx) : 1;
+    if (!(scale > 0) || !isFinite(scale)) scale = 1;
+    var wraps = el.batchSheets.querySelectorAll('.sheet-wrap');
+    for (var i = 0; i < wraps.length; i++) {
+      wraps[i].style.width = Math.round(wPx * scale) + 'px';
+      wraps[i].style.height = Math.round(hPx * scale) + 'px';
+      var sheet = wraps[i].querySelector('.sheet');
+      if (sheet) sheet.style.transform = 'scale(' + scale + ')';
+    }
+  }
+
+  // 尺寸、段落对齐、专名、术语、二维码或 CSV 变化后，已生成的异款拼版失效：
+  // 清空预览并禁用打印，重新点击「开始校样」后按新设置重新生成
+  function invalidateBatchSheets(reason) {
+    if (!batchImpose) return;
+    batchImpose = null;
+    lastBatchSheets = null;
+    el.batchSheetPrintBtn.disabled = true;
+    el.batchSheets.innerHTML = '';
+    setBatchSheetHint(reason, 'err');
+    el.batchSheetAreaSub.textContent = '异款拼版不可用：设置已修改，请重新校样';
+    showBatchSheetEmpty(reason, true);
+  }
+
   // ---------- 打印前设置 @page：单张为标签尺寸，拼版为 A4 对应方向 ----------
   var pageStyle = null;
   function beforePrint() {
     var sheetMode = printMode === 'sheet' && !el.sheetPrintBtn.disabled && lastSheets;
-    var singleMode = printMode !== 'sheet' && !el.printBtn.disabled && lastGood;
+    var batchMode = printMode === 'batch' && !el.batchSheetPrintBtn.disabled && lastBatchSheets;
+    var singleMode = printMode !== 'sheet' && printMode !== 'batch' &&
+      !el.printBtn.disabled && lastGood;
     document.body.classList.toggle('print-sheet', !!sheetMode);
+    document.body.classList.toggle('print-batch', !!batchMode);
     if (!pageStyle) {
       pageStyle = document.createElement('style');
       document.head.appendChild(pageStyle);
     }
-    if (sheetMode) {
+    if (batchMode) {
+      pageStyle.textContent = '@page { size: ' + lastBatchSheets.pageW + 'mm ' +
+        lastBatchSheets.pageH + 'mm; margin: 0; }';
+    } else if (sheetMode) {
       pageStyle.textContent = '@page { size: ' + lastSheets.pageW + 'mm ' +
         lastSheets.pageH + 'mm; margin: 0; }';
     } else if (singleMode) {
@@ -1719,10 +1957,24 @@
     el.copies.addEventListener(evt, schedule);
   });
 
-  // A4 纸张方向切换：实时重算拼版
+  // A4 纸张方向切换：实时重算同款拼版；异款拼版沿用同一方向选择，按新方向重新分页
   [el.orientPortrait, el.orientLandscape].forEach(function (radio) {
     radio.addEventListener('change', schedule);
+    radio.addEventListener('change', function () {
+      if (batchImpose) paginateBatchSheets();
+    });
   });
+
+  // 影响异款批量拼版的设置（尺寸、段落对齐、专名、术语、二维码）变化后拼版失效，
+  // 需重新点击「开始校样」按新设置生成（CSV 修改的失效处理见 updateBatchHint）
+  [el.widthMm, el.heightMm, el.paraAlign, el.protect, el.glossary, el.qrLink]
+    .forEach(function (input) {
+      ['input', 'change'].forEach(function (evt) {
+        input.addEventListener(evt, function () {
+          invalidateBatchSheets('排版设置已修改：异款拼版已失效，请重新点击「开始校样」按新设置生成。');
+        });
+      });
+    });
 
   // 修订稿：按 Unicode 字符计 300 字上限，超出部分截断
   function updateRevCount(truncated) {
@@ -1768,6 +2020,7 @@
   updateRevCount(false);
   updateStockHint();
   updateBatchHint();
+  paginateBatchSheets(); // 初始空态：提示先粘贴 CSV 校样
 
   el.printBtn.addEventListener('click', function () {
     printMode = 'single';
@@ -1777,11 +2030,16 @@
     printMode = 'sheet';
     window.print();
   });
+  el.batchSheetPrintBtn.addEventListener('click', function () {
+    printMode = 'batch';
+    window.print();
+  });
   window.addEventListener('beforeprint', beforePrint);
   window.addEventListener('afterprint', function () {
     // 打印结束后恢复默认单张模式，避免下次 Ctrl+P 误用拼版
     printMode = 'single';
     document.body.classList.remove('print-sheet');
+    document.body.classList.remove('print-batch');
   });
 
   var resizeTimer = null;
@@ -1790,6 +2048,7 @@
     resizeTimer = setTimeout(function () {
       fitScale();
       fitSheets();
+      fitBatchSheets();
     }, 80);
   });
 

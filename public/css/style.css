@@ -347,6 +347,24 @@ button:disabled { background: #aaa5; cursor: not-allowed; }
   letter-spacing: 1px;
 }
 
+/* ========== 异款批量拼版 ========== */
+.batch-sheet-ctrl {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-bottom: 14px;
+}
+.batch-sheet-ctrl-title {
+  font-size: 13px;
+  margin: 0 0 8px;
+  letter-spacing: 1px;
+}
+.batch-sheet-note {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+
 /* ========== 右侧预览舞台 ========== */
 .stage-wrap { overflow: auto; }
 .stage {
@@ -541,6 +559,13 @@ button:disabled { background: #aaa5; cursor: not-allowed; }
   background: rgba(179, 38, 30, 0.04);
 }
 
+/* 异款批量拼版预览区：与同款拼版相同的纸张/分页结构，
+   每张为不同记录各自生成的展签（沿用 .sheet / .sheet-label 等样式） */
+.batch-sheet-area {
+  border-top: 1px solid var(--line);
+  padding: 18px 24px 36px;
+}
+
 /* ========== 打印：单张模式 #label 即页面；拼版模式只输出拼版页 ========== */
 @page { margin: 0; }
 
@@ -566,6 +591,7 @@ button:disabled { background: #aaa5; cursor: not-allowed; }
   }
   /* 单张打印：不输出拼版预览区 */
   .sheet-area { display: none !important; }
+  .batch-sheet-area { display: none !important; }
 
   /* 拼版打印（body.print-sheet）：只输出拼版页，不输出编辑面板与单张预览 */
   body.print-sheet .stage { display: none !important; }
@@ -593,4 +619,32 @@ button:disabled { background: #aaa5; cursor: not-allowed; }
     break-after: auto;
   }
   body.print-sheet .sheet .sheet-label { border: none; }
+
+  /* 异款批量拼版打印（body.print-batch）：只输出异款拼版页，
+     不输出编辑面板、单张预览与同款拼版预览 */
+  body.print-batch .stage { display: none !important; }
+  body.print-batch .batch-sheet-area {
+    display: block !important;
+    border: none;
+    padding: 0;
+  }
+  body.print-batch .batch-sheet-area .sheet-area-head,
+  body.print-batch .batch-sheet-area .sheet-caption { display: none !important; }
+  body.print-batch .batch-sheet-area .sheet-block { display: block; margin: 0; }
+  body.print-batch .batch-sheet-area .sheet-wrap {
+    width: auto !important;
+    height: auto !important;
+    overflow: visible;
+  }
+  body.print-batch .batch-sheet-area .sheet {
+    transform: none !important;
+    box-shadow: none;
+    page-break-after: always;
+    break-after: page;
+  }
+  body.print-batch .batch-sheet-area .sheet-block:last-child .sheet {
+    page-break-after: auto;
+    break-after: auto;
+  }
+  body.print-batch .batch-sheet-area .sheet .sheet-label { border: none; }
 }

@@ -107,6 +107,17 @@
       <div id="batchResult" class="batch-result" hidden></div>
     </section>
 
+    <section class="batch-sheet-ctrl">
+      <h2 class="batch-sheet-ctrl-title">异款批量拼版打印 <span class="compare-sub">校样通过的不同记录按原顺序拼满 A4</span></h2>
+      <p class="batch-sheet-note">沿用上方「批量校样」的 CSV 入口：点击「开始校样」后，通过校验的记录各自独立生成展签，
+        按当前展签尺寸与「同款拼版」区的纸张方向逐页拼入 A4（每边留白 10mm、展签间隔 4mm、不缩放）；
+        失败记录在校样结果中列出原因，不进入拼版。</p>
+      <div class="actions">
+        <button id="batchSheetPrintBtn" type="button" disabled>异款拼版打印 / 导出 PDF</button>
+      </div>
+      <span class="sheet-hint" id="batchSheetHint"></span>
+    </section>
+
     <section id="compare" class="compare" hidden>
       <h2 class="compare-title">修订对照 <span class="compare-sub">差异标记仅用于对照，不进入打印</span></h2>
       <div id="diffView" class="diff-view"></div>
@@ -205,6 +216,14 @@
           沿用当前尺寸、段落对齐、专名保护、二维码与术语表设置逐条试排，
           列出可用字号或失败原因；校样不改变当前成品，点击通过记录的「载入编辑」
           才回填三栏并清空修订稿。</li>
+        <li><strong>异款批量拼版打印</strong>：沿用「批量校样」的 CSV 入口，点击「开始校样」后，
+          通过校验的不同记录按原顺序各自调用现有排版与打印门禁独立生成展签
+          （中英、段落对齐、专名保护、术语核对与二维码均沿用当前设置，各展签保留自己的换行与码图），
+          失败记录在校样结果中列出原因且不进入拼版；通过记录按当前展签毫米尺寸与
+          「同款拼版」区的纸张方向逐页拼入 A4（每边留白 10mm、展签间隔 4mm、不缩放），
+          右侧「异款批量拼版预览」分页展示每页每张位置，与打印输出逐格对应；
+          单页连一张都放不下时提示展签尺寸与纸内可用尺寸并禁用异款拼版打印；
+          修改尺寸、段落对齐、专名、术语、二维码或 CSV 后拼版失效，需重新点击「开始校样」。</li>
       </ul>
     </details>
   </aside>
@@ -230,6 +249,15 @@
       </div>
       <div id="sheets" class="sheets"></div>
       <div id="sheetEmpty" class="sheet-empty" hidden></div>
+    </section>
+
+    <section id="batchSheetArea" class="batch-sheet-area">
+      <div class="sheet-area-head">
+        <h2 class="sheet-area-title">异款批量拼版预览</h2>
+        <span class="sheet-area-sub" id="batchSheetAreaSub">校样通过的不同记录按原顺序拼入 A4 页</span>
+      </div>
+      <div id="batchSheets" class="sheets"></div>
+      <div id="batchSheetEmpty" class="sheet-empty" hidden></div>
     </section>
   </main>
 </div>
