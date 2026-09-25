@@ -52,6 +52,14 @@
     batchHint: document.getElementById('batchHint'),
     batchRunBtn: document.getElementById('batchRunBtn'),
     batchResult: document.getElementById('batchResult'),
+    mixCtrl: document.getElementById('mixCtrl'),
+    mixSummary: document.getElementById('mixSummary'),
+    mixPrintBtn: document.getElementById('mixPrintBtn'),
+    mixHint: document.getElementById('mixHint'),
+    mixArea: document.getElementById('mixArea'),
+    mixAreaSub: document.getElementById('mixAreaSub'),
+    mixSheets: document.getElementById('mixSheets'),
+    mixEmpty: document.getElementById('mixEmpty'),
     printBtn: document.getElementById('printBtn'),
     status: document.getElementById('status'),
     stage: document.getElementById('stage'),
@@ -535,7 +543,10 @@
   var lastGood = null;
   var currentQr = null; // 当前生效的二维码（LabelQR.encode 结果）；null 表示不生成
   var lastSheets = null; // 当前可用的拼版方案；null 表示拼版不可用
-  var printMode = 'single'; // 本次打印输出：'single' 单张 / 'sheet' 拼版
+  var printMode = 'single'; // 本次打印输出：'single' 单张 / 'sheet' 同款拼版 / 'mix' 异款拼版
+  var lastMixSheets = null;   // 当前可用的异款拼版方案；null 表示不可用
+  var lastBatchRows = null;   // 最近一次校样的逐记录结果（含排版结果与门禁结论）
+  var lastBatchQr = null;     // 最近一次校样时沿用的二维码（null 表示不生成）
 
   // 把 QR 模块矩阵画到 canvas 上（白底黑块；显示尺寸由 CSS 固定为 18mm，
   // 码图之外的空白由底部 22mm 预留区与内边距保证，预览与打印共用同一 canvas）
@@ -556,9 +567,10 @@
     }
   }
 
-  // 把一次成功的排版结果写入展签 DOM 与 CSS 变量（预览与打印共用此结果）
-  function applyResult(input, result) {
-    var s = el.label.style;
+  // 把一次成功排版的毫米尺寸与字号写入展签节点的 CSS 变量
+  // （单张预览与异款拼版中各记录的展签各自独立设置，互不影响）
+  function setLabelVars(node, input, result) {
+    var s = node.style;
     s.setProperty('--label-w', input.widthMm + 'mm');
     s.setProperty('--label-h', input.heightMm + 'mm');
     s.setProperty('--body-size', result.bodyPx + 'px');
@@ -568,6 +580,63 @@
         ? (result.bodyPx * TITLE_GAP_PX_FACTOR) + 'px'
         : '0px');
     s.setProperty('--para-gap', result.bodyPx * PARA_GAP_PX_FACTOR + 'px');
+  }
+
+  // 按一次成功排版的结果构建完整展签节点（与单张预览同结构、同类名）：
+  // 单栏/中英双栏/段落对齐均保留各自预断行；qrModules 非空时在底部 22mm 区
+  // 居中绘制该记录自己的二维码（沿用同一全局链接，逐格重绘同一模块矩阵）。
+  function buildLabelNode(input, result, qrModules) {
+    var node = document.createElement('div');
+    node.className = 'label';
+    setLabelVars(node, input, result);
+
+    var titleEl = document.createElement('div');
+    titleEl.className = 'label-title';
+    if (result.titlePlan) buildLines(titleEl, result.titlePlan);
+    node.appendChild(titleEl);
+
+    if (result.paired && result.zhPlan && result.enPlan) {
+      var pairedEl = document.createElement('div');
+      pairedEl.className = 'label-content paired';
+      buildPairedLines(pairedEl, result.zhPlan, result.enPlan);
+      node.appendChild(pairedEl);
+    } else {
+      var contentEl = document.createElement('div');
+      contentEl.className = 'label-content' + (result.dual ? ' dual' : '');
+      if (result.zhPlan) {
+        var zhEl = document.createElement('div');
+        zhEl.className = 'label-col';
+        buildLines(zhEl, result.zhPlan);
+        contentEl.appendChild(zhEl);
+      }
+      if (result.dual && result.enPlan) {
+        var enEl = document.createElement('div');
+        enEl.className = 'label-col label-col-en';
+        buildLines(enEl, result.enPlan);
+        contentEl.appendChild(enEl);
+      }
+      node.appendChild(contentEl);
+    }
+
+    if (qrModules) {
+      var qrEl = document.createElement('div');
+      qrEl.className = 'label-qr';
+      var canvas = document.createElement('canvas');
+      drawQr(canvas, qrModules);
+      qrEl.appendChild(canvas);
+      node.appendChild(qrEl);
+    }
+
+    var errEl = document.createElement('div');
+    errEl.className = 'label-error';
+    errEl.hidden = true;
+    node.appendChild(errEl);
+    return node;
+  }
+
+  // 把一次成功的排版结果写入展签 DOM 与 CSS 变量（预览与打印共用此结果）
+  function applyResult(input, result) {
+    setLabelVars(el.label, input, result);
 
     el.labelError.hidden = true;
 
@@ -1273,6 +1342,7 @@
   // CSV 输入提示：实时解析并汇总记录数与逐条校验错误（不排版、不改变成品）
   function updateBatchHint() {
     el.batchResult.hidden = true;
+    resetMixSheets();
     var raw = el.batchCsv.value;
     el.batchHint.classList.remove('err');
     if (!String(raw).trim()) {
@@ -1297,6 +1367,7 @@
   }
 
   function showBatchError(message) {
+    resetMixSheets();
     el.batchResult.innerHTML = '';
     var div = document.createElement('div');
     div.className = 'batch-result-errs';
@@ -1336,7 +1407,7 @@
 
     var paraAlignOn = el.paraAlign.checked;
     var rows = batch.records.map(function (rec) {
-      if (!rec.valid) return { rec: rec, result: null, termFail: null };
+      if (!rec.valid) return { rec: rec, result: null, termFail: null, trial: null };
       var enTrim = rec.en.trim();
       // 仅替换三栏文案；尺寸、段落对齐、专名、二维码预留均沿用当前设置
       var trial = {
@@ -1364,10 +1435,17 @@
             ' 处术语次数不符（载入后可在「双语术语核对」区查看明细）';
         }
       }
-      return { rec: rec, result: result, termFail: termFail };
+      return { rec: rec, result: result, termFail: termFail, trial: trial };
     });
 
     renderBatchResult(c, glossary.entries.length, paraAlignOn, rows);
+
+    // 异款批量拼版：沿用本次校样的逐记录排版结果与当前二维码设置，
+    // 通过校验与打印门禁的记录按 CSV 原顺序逐格拼入 A4；
+    // 结果保留在校样时点，修改设置/文案后需重新校样。
+    lastBatchRows = rows;
+    lastBatchQr = c.qr;
+    updateMixSheets();
   }
 
   // 校样结果：逐条列出可用字号或失败原因；通过记录提供「载入编辑」
@@ -1653,6 +1731,188 @@
     fitSheets();
   }
 
+  // ---------- 异款批量拼版：通过校样的不同记录按原顺序逐格排入 A4 ----------
+  // 每条记录沿用最近一次校样时各自独立的排版结果（预断行、字号、段落对齐 grid）
+  // 与同一二维码链接的码图，按当前展签毫米尺寸、纸张方向、10mm 页边距与 4mm
+  // 间隔分页；失败记录（列数/必填、超宽、超高、段数不一致、术语核对未通过）
+  // 列出原因且不进入拼版；单页连一张都放不下时禁印并说明尺寸。
+  function mixFailReason(row) {
+    if (!row.rec.valid) return '✗ ' + row.rec.error;
+    if (!row.result.ok) return stockFailNote(row.result, !!lastBatchQr);
+    if (row.termFail) return '✗ ' + row.termFail;
+    return '✗ 未通过';
+  }
+
+  function setMixHint(text, kind) {
+    el.mixHint.textContent = text;
+    el.mixHint.className = 'sheet-hint' + (kind ? ' ' + kind : '');
+  }
+
+  function showMixEmpty(msg) {
+    el.mixEmpty.textContent = msg;
+    el.mixEmpty.className = 'sheet-empty err';
+    el.mixEmpty.hidden = false;
+  }
+
+  // 隐藏并清空异款拼版控制与分页预览（CSV 被修改或校样整体失败时调用）
+  function resetMixSheets() {
+    lastBatchRows = null;
+    lastMixSheets = null;
+    el.mixPrintBtn.disabled = true;
+    el.mixSheets.innerHTML = '';
+    el.mixEmpty.hidden = true;
+    el.mixCtrl.hidden = true;
+    el.mixArea.hidden = true;
+  }
+
+  // 逐页填充异款拼版：accepted 为通过门禁的校样行（按 CSV 原顺序），
+  // 每页 cols×rows 格，从左到右、从上到下；每条记录用自己的排版结果独立成签
+  function buildMixSheets(plan, labelW, labelH, accepted) {
+    el.mixSheets.innerHTML = '';
+    var perPage = plan.cols * plan.rows;
+    var pages = Math.ceil(accepted.length / perPage);
+    for (var p = 0; p < pages; p++) {
+      var block = document.createElement('div');
+      block.className = 'sheet-block';
+      var wrap = document.createElement('div');
+      wrap.className = 'sheet-wrap';
+      var sheet = document.createElement('div');
+      sheet.className = 'sheet';
+      sheet.style.width = plan.pageW + 'mm';
+      sheet.style.height = plan.pageH + 'mm';
+      var start = p * perPage;
+      var count = Math.min(perPage, accepted.length - start);
+      for (var i = 0; i < count; i++) {
+        var row = accepted[start + i];
+        var col = i % plan.cols;
+        var r = Math.floor(i / plan.cols);
+        var cell = buildLabelNode(row.trial, row.result,
+          lastBatchQr ? lastBatchQr.modules : null);
+        cell.classList.add('sheet-label');
+        cell.style.left = (SHEET_MARGIN_MM + col * (labelW + SHEET_GAP_MM)) + 'mm';
+        cell.style.top = (SHEET_MARGIN_MM + r * (labelH + SHEET_GAP_MM)) + 'mm';
+        var no = document.createElement('span');
+        no.className = 'mix-no';
+        no.textContent = '#' + row.rec.no;
+        no.title = '第 ' + row.rec.no + ' 条记录：' + briefTitle(row.rec.title);
+        cell.appendChild(no);
+        sheet.appendChild(cell);
+      }
+      wrap.appendChild(sheet);
+      block.appendChild(wrap);
+      var cap = document.createElement('div');
+      cap.className = 'sheet-caption';
+      var firstNo = accepted[start].rec.no;
+      var lastNo = accepted[start + count - 1].rec.no;
+      cap.textContent = '第 ' + (p + 1) + ' / ' + pages + ' 页 · 本页 ' + count +
+        ' 张（记录 ' + (count === 1 ? firstNo : firstNo + '–' + lastNo) + '）';
+      block.appendChild(cap);
+      el.mixSheets.appendChild(block);
+    }
+    return pages;
+  }
+
+  // 按最近一次校样结果刷新异款拼版控制区与分页预览
+  function updateMixSheets() {
+    lastMixSheets = null;
+    el.mixPrintBtn.disabled = true;
+    el.mixSheets.innerHTML = '';
+    el.mixEmpty.hidden = true;
+
+    if (!lastBatchRows) {
+      el.mixCtrl.hidden = true;
+      el.mixArea.hidden = true;
+      return;
+    }
+    el.mixCtrl.hidden = false;
+
+    var accepted = lastBatchRows.filter(function (row) {
+      return row.rec.valid && row.result && row.result.ok && !row.termFail;
+    });
+    var skipped = lastBatchRows.filter(function (row) {
+      return accepted.indexOf(row) < 0;
+    });
+
+    var lines = ['共 ' + lastBatchRows.length + ' 条记录，' + accepted.length +
+      ' 条通过并按 CSV 原顺序进入异款拼版' + (skipped.length ? '，' : '。')];
+    if (skipped.length) {
+      lines.push(skipped.length + ' 条失败、不进入拼版（原因见上方校样结果表）：');
+      skipped.forEach(function (row) {
+        lines.push('· 第 ' + row.rec.no + ' 条 ' + briefTitle(row.rec.title) +
+          '：' + mixFailReason(row).replace(/^✗\s*/, ''));
+      });
+    }
+    el.mixSummary.innerHTML = '';
+    lines.forEach(function (text, idx) {
+      var span = document.createElement('span');
+      span.textContent = text;
+      if (idx > 0 && skipped.length) span.className = 'mix-skip';
+      el.mixSummary.appendChild(span);
+    });
+
+    if (!accepted.length) {
+      setMixHint('没有通过校样与打印门禁的记录，异款拼版打印不可用。', 'err');
+      el.mixAreaSub.textContent = '异款拼版不可用：没有通过校样的记录';
+      el.mixArea.hidden = true;
+      return;
+    }
+
+    var labelW = accepted[0].trial.widthMm;
+    var labelH = accepted[0].trial.heightMm;
+    var landscape = el.orientLandscape.checked;
+    var orientName = landscape ? '横向' : '纵向';
+    var plan = planSheetCapacity(labelW, labelH, landscape);
+
+    // 单页连一张都放不下：说明展签尺寸与纸内可用尺寸并禁印
+    if (plan.cols < 1 || plan.rows < 1) {
+      var msg = 'A4 ' + orientName + '纸内连一张展签都放不下：展签 ' +
+        fmtMm(labelW) + ' × ' + fmtMm(labelH) +
+        '，纸内可用 ' + fmtMm(plan.usableW) + ' × ' + fmtMm(plan.usableH) +
+        '（A4 ' + orientName + ' ' + plan.pageW + '×' + plan.pageH + 'mm，' +
+        '每边留白 ' + SHEET_MARGIN_MM + 'mm）。';
+      setMixHint(msg + '\n可切换纸张方向（下方「同款拼版打印」）或缩小展签尺寸后重新校样；' +
+        '异款拼版打印已禁用。', 'err');
+      el.mixAreaSub.textContent = '异款拼版不可用：展签超出纸内可用尺寸';
+      el.mixArea.hidden = false;
+      showMixEmpty(msg + '\n可切换纸张方向或缩小展签尺寸后重新校样。');
+      return;
+    }
+
+    var perPage = plan.cols * plan.rows;
+    var pages = buildMixSheets(plan, labelW, labelH, accepted);
+    lastMixSheets = {
+      pageW: plan.pageW, pageH: plan.pageH,
+      cols: plan.cols, rows: plan.rows, pages: pages
+    };
+    el.mixPrintBtn.disabled = false;
+    setMixHint('A4 ' + orientName + '：每页 ' + plan.cols + ' 列 × ' + plan.rows +
+      ' 行 = ' + perPage + ' 格，' + accepted.length + ' 张共 ' + pages +
+      ' 页；每边留白 ' + SHEET_MARGIN_MM + 'mm、展签间隔 ' + SHEET_GAP_MM +
+      'mm，各展签按原毫米尺寸排入、不缩放，保留各自换行与二维码码图。', 'ok');
+    el.mixAreaSub.textContent = 'A4 ' + orientName + ' · 每页 ' + plan.cols +
+      ' × ' + plan.rows + ' = ' + perPage + ' 格 · ' + accepted.length +
+      ' 张共 ' + pages + ' 页';
+    el.mixArea.hidden = false;
+    fitMixSheets();
+  }
+
+  // 异款拼版预览的屏幕整体缩放（与同款拼版同一口径；打印时 transform 被清除）
+  function fitMixSheets() {
+    if (!lastMixSheets) return;
+    var availW = el.mixArea.clientWidth - 48;
+    var wPx = lastMixSheets.pageW * PX_PER_MM;
+    var hPx = lastMixSheets.pageH * PX_PER_MM;
+    var scale = availW > 0 ? Math.min(1, availW / wPx) : 1;
+    if (!(scale > 0) || !isFinite(scale)) scale = 1;
+    var wraps = el.mixSheets.querySelectorAll('.sheet-wrap');
+    for (var i = 0; i < wraps.length; i++) {
+      wraps[i].style.width = Math.round(wPx * scale) + 'px';
+      wraps[i].style.height = Math.round(hPx * scale) + 'px';
+      var sheet = wraps[i].querySelector('.sheet');
+      if (sheet) sheet.style.transform = 'scale(' + scale + ')';
+    }
+  }
+
   // 屏幕上的纸张整体缩放（仅显示用；打印时 transform 被打印样式清除，纸张 1:1）
   function fitSheets() {
     if (!lastSheets) return;
@@ -1673,14 +1933,19 @@
   // ---------- 打印前设置 @page：单张为标签尺寸，拼版为 A4 对应方向 ----------
   var pageStyle = null;
   function beforePrint() {
+    var mixMode = printMode === 'mix' && !el.mixPrintBtn.disabled && lastMixSheets;
     var sheetMode = printMode === 'sheet' && !el.sheetPrintBtn.disabled && lastSheets;
-    var singleMode = printMode !== 'sheet' && !el.printBtn.disabled && lastGood;
+    var singleMode = printMode === 'single' && !el.printBtn.disabled && lastGood;
     document.body.classList.toggle('print-sheet', !!sheetMode);
+    document.body.classList.toggle('print-mix', !!mixMode);
     if (!pageStyle) {
       pageStyle = document.createElement('style');
       document.head.appendChild(pageStyle);
     }
-    if (sheetMode) {
+    if (mixMode) {
+      pageStyle.textContent = '@page { size: ' + lastMixSheets.pageW + 'mm ' +
+        lastMixSheets.pageH + 'mm; margin: 0; }';
+    } else if (sheetMode) {
       pageStyle.textContent = '@page { size: ' + lastSheets.pageW + 'mm ' +
         lastSheets.pageH + 'mm; margin: 0; }';
     } else if (singleMode) {
@@ -1719,9 +1984,12 @@
     el.copies.addEventListener(evt, schedule);
   });
 
-  // A4 纸张方向切换：实时重算拼版
+  // A4 纸张方向切换：实时重算同款拼版；异款拼版沿用最近一次校样结果同步重排
   [el.orientPortrait, el.orientLandscape].forEach(function (radio) {
-    radio.addEventListener('change', schedule);
+    radio.addEventListener('change', function () {
+      schedule();
+      updateMixSheets();
+    });
   });
 
   // 修订稿：按 Unicode 字符计 300 字上限，超出部分截断
@@ -1777,11 +2045,16 @@
     printMode = 'sheet';
     window.print();
   });
+  el.mixPrintBtn.addEventListener('click', function () {
+    printMode = 'mix';
+    window.print();
+  });
   window.addEventListener('beforeprint', beforePrint);
   window.addEventListener('afterprint', function () {
     // 打印结束后恢复默认单张模式，避免下次 Ctrl+P 误用拼版
     printMode = 'single';
     document.body.classList.remove('print-sheet');
+    document.body.classList.remove('print-mix');
   });
 
   var resizeTimer = null;
@@ -1790,6 +2063,7 @@
     resizeTimer = setTimeout(function () {
       fitScale();
       fitSheets();
+      fitMixSheets();
     }, 80);
   });
 

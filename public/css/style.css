@@ -347,6 +347,29 @@ button:disabled { background: #aaa5; cursor: not-allowed; }
   letter-spacing: 1px;
 }
 
+/* ========== 异款批量拼版 ========== */
+.mix-ctrl {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-bottom: 14px;
+}
+.mix-ctrl-title {
+  font-size: 13px;
+  margin: 0 0 8px;
+  letter-spacing: 1px;
+}
+.mix-summary {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+  margin-bottom: 6px;
+  white-space: pre-line;
+}
+.mix-summary span { display: block; }
+.mix-summary .mix-skip {
+  color: var(--danger);
+}
+
 /* ========== 右侧预览舞台 ========== */
 .stage-wrap { overflow: auto; }
 .stage {
@@ -519,6 +542,21 @@ button:disabled { background: #aaa5; cursor: not-allowed; }
   box-shadow: none;
   border: 1px dashed #c3c8cf;
 }
+/* 异款拼版每格左上的记录号（仅屏幕标示位置，打印时隐藏） */
+.sheet .mix-no {
+  position: absolute;
+  top: 0.6mm;
+  left: 0.8mm;
+  font-family: var(--ui-font);
+  font-size: 9px;
+  line-height: 1;
+  color: #6b7280;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 1px 3px;
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 2;
+}
 .sheet-caption {
   font-size: 12px;
   color: var(--muted);
@@ -593,4 +631,34 @@ button:disabled { background: #aaa5; cursor: not-allowed; }
     break-after: auto;
   }
   body.print-sheet .sheet .sheet-label { border: none; }
+
+  /* 异款拼版打印（body.print-mix）：只输出异款拼版页，
+     不输出编辑面板、单张预览与同款拼版预览 */
+  body.print-mix .stage { display: none !important; }
+  body.print-mix #sheetArea { display: none !important; }
+  body.print-mix #mixArea {
+    display: block !important;
+    border: none;
+    padding: 0;
+  }
+  body.print-mix .sheet-area-head,
+  body.print-mix .sheet-caption { display: none !important; }
+  body.print-mix .sheet-block { display: block; margin: 0; }
+  body.print-mix .sheet-wrap {
+    width: auto !important;
+    height: auto !important;
+    overflow: visible;
+  }
+  body.print-mix .sheet {
+    transform: none !important;
+    box-shadow: none;
+    page-break-after: always;
+    break-after: page;
+  }
+  body.print-mix .sheet-block:last-child .sheet {
+    page-break-after: auto;
+    break-after: auto;
+  }
+  body.print-mix .sheet .sheet-label { border: none; }
+  body.print-mix .sheet .mix-no { display: none; }
 }

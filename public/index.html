@@ -105,6 +105,16 @@
         <button id="batchRunBtn" type="button">开始校样（沿用当前尺寸与设置，不改变当前成品）</button>
       </div>
       <div id="batchResult" class="batch-result" hidden></div>
+
+      <section id="mixCtrl" class="mix-ctrl" hidden>
+        <h2 class="mix-ctrl-title">异款批量拼版 <span class="compare-sub">把通过校样的不同记录按原顺序拼到 A4</span></h2>
+        <div id="mixSummary" class="mix-summary"></div>
+        <span class="field-hint">A4 纵向/横向沿用下方「同款拼版打印」的方向设置；每边留白 10mm、间隔 4mm。</span>
+        <div class="actions">
+          <button id="mixPrintBtn" type="button">异款拼版打印 / 导出 PDF</button>
+        </div>
+        <span class="sheet-hint" id="mixHint"></span>
+      </section>
     </section>
 
     <section id="compare" class="compare" hidden>
@@ -205,6 +215,11 @@
           沿用当前尺寸、段落对齐、专名保护、二维码与术语表设置逐条试排，
           列出可用字号或失败原因；校样不改变当前成品，点击通过记录的「载入编辑」
           才回填三栏并清空修订稿。</li>
+        <li><strong>异款批量拼版</strong>：沿用批量校样入口与当前毫米尺寸、方向、
+          10mm 页边距、4mm 间隔设置，校样后把<strong>通过校验与打印门禁</strong>的不同记录
+          按 CSV 原顺序逐格排入 A4；失败记录列出原因且不进入拼版；每条记录独立排版、
+          保留各自换行与二维码码图；单页连一张都放不下时禁印并说明展签与可用尺寸；
+          右侧「异款批量拼版预览」分页展示，「异款拼版打印」只输出异款拼版页。</li>
       </ul>
     </details>
   </aside>
@@ -230,6 +245,15 @@
       </div>
       <div id="sheets" class="sheets"></div>
       <div id="sheetEmpty" class="sheet-empty" hidden></div>
+    </section>
+
+    <section id="mixArea" class="sheet-area" hidden>
+      <div class="sheet-area-head">
+        <h2 class="sheet-area-title">异款批量拼版预览</h2>
+        <span class="sheet-area-sub" id="mixAreaSub">通过校样的不同记录按原顺序逐格排入 A4，预览与打印逐格对应</span>
+      </div>
+      <div id="mixSheets" class="sheets"></div>
+      <div id="mixEmpty" class="sheet-empty" hidden></div>
     </section>
   </main>
 </div>
